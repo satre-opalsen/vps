@@ -7,8 +7,11 @@ import (
 	"EverythingSuckz/fsb/internal/utils"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/gotd/td/tg"
 	range_parser "github.com/quantumsheep/range-parser"
@@ -22,7 +25,20 @@ var log *zap.Logger
 func (e *allRoutes) LoadHome(r *Route) {
 	log = e.log.Named("Stream")
 	defer log.Info("Loaded stream route")
-	r.Engine.GET("/stream/:messageID", getStreamRoute)
+
+	paths := []string{
+		"/stream/:messageID",
+		"/telegram/:messageID",
+		"/telegram/:messageID/stream",
+		"/telegram/:messageID/dl",
+		"/telegram/:messageID/dl=true",
+		"/telegram/:messageID/download",
+	}
+
+	for _, p := range paths {
+		r.Engine.GET(p, getStreamRoute)
+		r.Engine.HEAD(p, getStreamRoute)
+	}
 }
 
 func getStreamRoute(ctx *gin.Context) {
@@ -30,16 +46,17 @@ func getStreamRoute(ctx *gin.Context) {
 	r := ctx.Request
 
 	messageIDParm := ctx.Param("messageID")
-	messageID, err := strconv.Atoi(messageIDParm)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+	var messageID int
+	if len(messageIDParm) == 6 {
+		messageID = utils.DecodeMessageID(messageIDParm)
 	}
-
-	authHash := ctx.Query("hash")
-	if authHash == "" {
-		http.Error(w, "missing hash param", http.StatusBadRequest)
-		return
+	if messageID == 0 {
+		var err error
+		messageID, err = strconv.Atoi(messageIDParm)
+		if err != nil {
+			http.Error(w, "invalid message id", http.StatusBadRequest)
+			return
+		}
 	}
 
 	worker := bot.GetNextWorker()
@@ -52,15 +69,23 @@ func getStreamRoute(ctx *gin.Context) {
 		return
 	}
 
-	expectedHash := utils.PackFile(
-		file.FileName,
-		file.FileSize,
-		file.MimeType,
-		file.ID,
-	)
-	if !utils.CheckHash(authHash, expectedHash) {
-		http.Error(w, "invalid hash", http.StatusBadRequest)
-		return
+	authHash := ctx.Query("hash")
+	if authHash != "" {
+		expectedHash := utils.PackFile(
+			file.FileName,
+			file.FileSize,
+			file.MimeType,
+			file.ID,
+		)
+		if !utils.CheckHash(authHash, expectedHash) {
+			http.Error(w, "invalid hash", http.StatusBadRequest)
+			return
+		}
+	}
+
+	safeFileName := strings.ReplaceAll(file.FileName, "\"", "_")
+	if safeFileName == "" {
+		safeFileName = fmt.Sprintf("file_%d", messageID)
 	}
 
 	// for photo messages
@@ -80,7 +105,7 @@ func getStreamRoute(ctx *gin.Context) {
 			return
 		}
 		fileBytes := result.GetBytes()
-		ctx.Header("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", file.FileName))
+		ctx.Header("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", safeFileName))
 		if r.Method != "HEAD" {
 			ctx.Data(http.StatusOK, file.MimeType, fileBytes)
 		}
@@ -111,6 +136,13 @@ func getStreamRoute(ctx *gin.Context) {
 	contentLength := end - start + 1
 	mimeType := file.MimeType
 
+	if mimeType == "" || mimeType == "application/octet-stream" {
+		if ext := filepath.Ext(safeFileName); ext != "" {
+			if guessed := mime.TypeByExtension(ext); guessed != "" {
+				mimeType = guessed
+			}
+		}
+	}
 	if mimeType == "" {
 		mimeType = "application/octet-stream"
 	}
@@ -119,12 +151,15 @@ func getStreamRoute(ctx *gin.Context) {
 	ctx.Header("Content-Length", strconv.FormatInt(contentLength, 10))
 
 	disposition := "inline"
-
-	if ctx.Query("d") == "true" {
+	cleanPath := strings.TrimSuffix(r.URL.Path, "/")
+	if ctx.Query("d") == "true" || ctx.Query("dl") == "true" ||
+		strings.HasSuffix(cleanPath, "/dl") ||
+		strings.HasSuffix(cleanPath, "/dl=true") ||
+		strings.HasSuffix(cleanPath, "/download") {
 		disposition = "attachment"
 	}
 
-	ctx.Header("Content-Disposition", fmt.Sprintf("%s; filename=\"%s\"", disposition, file.FileName))
+	ctx.Header("Content-Disposition", fmt.Sprintf("%s; filename=\"%s\"", disposition, safeFileName))
 
 	if r.Method != "HEAD" {
 		pipe, err := stream.NewStreamPipe(ctx, worker.Client, file.Location, start, end, log)

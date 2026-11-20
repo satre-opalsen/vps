@@ -24,19 +24,17 @@ func (m *command) LoadStream(dispatcher dispatcher.Dispatcher) {
 	)
 }
 
-func supportedMediaFilter(m *types.Message) (bool, error) {
-	if not := m.Media == nil; not {
-		return false, dispatcher.EndGroups
+func supportedMediaFilter(m *types.Message) bool {
+	if m == nil || m.Media == nil {
+		return false
 	}
 	switch m.Media.(type) {
 	case *tg.MessageMediaDocument:
-		return true, nil
+		return true
 	case *tg.MessageMediaPhoto:
-		return true, nil
-	case tg.MessageMediaClass:
-		return false, dispatcher.EndGroups
+		return true
 	default:
-		return false, nil
+		return false
 	}
 }
 
@@ -49,14 +47,23 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 		ctx.Reply(u, ext.ReplyTextString("⛔ ACCESS DENIED // Unauthorized Operator."), nil)
 		return dispatcher.EndGroups
 	}
-	supported, err := supportedMediaFilter(u.EffectiveMessage)
-	if err != nil {
-		return err
+
+	// Skip bot commands like /start so they are handled by their dedicated handlers
+	if u.EffectiveMessage != nil && strings.HasPrefix(strings.TrimSpace(u.EffectiveMessage.Text), "/") {
+		return nil
 	}
-	if !supported {
-		ctx.Reply(u, ext.ReplyTextString("⚠️ Please send or forward a valid file, document, video, or audio."), nil)
+
+	// Handle non-media text messages by asking for a document/file
+	if !supportedMediaFilter(u.EffectiveMessage) {
+		textReply := "⚠️ <b>NO FILE DETECTED</b>\n\n" +
+			"Please send or forward a <b>document, video, audio, or file</b> to generate a fast direct link!"
+		_, _ = ctx.Reply(u, ext.ReplyTextStyledText(HTMLString(textReply)), &ext.ReplyOpts{
+			NoWebpage:        true,
+			ReplyToMessageId: u.EffectiveMessage.ID,
+		})
 		return dispatcher.EndGroups
 	}
+
 	update, err := utils.ForwardMessages(ctx, chatId, config.ValueOf.LogChannelID, u.EffectiveMessage.ID)
 	if err != nil {
 		utils.Logger.Sugar().Error(err)
@@ -89,16 +96,10 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 		ctx.Reply(u, ext.ReplyTextString(fmt.Sprintf("❌ Media extraction error: %s", err.Error())), nil)
 		return dispatcher.EndGroups
 	}
-	fullHash := utils.PackFile(
-		file.FileName,
-		file.FileSize,
-		file.MimeType,
-		file.ID,
-	)
-	hash := utils.GetShortHash(fullHash)
-	link := fmt.Sprintf("%s/stream/%d?hash=%s", config.ValueOf.Host, messageID, hash)
-	downloadLink := link + "&d=true"
-	streamLink := link
+
+	code := utils.EncodeMessageID(messageID)
+	downloadLink := fmt.Sprintf("%s/telegram/%s/dl", config.ValueOf.Host, code)
+	streamLink := fmt.Sprintf("%s/telegram/%s/stream", config.ValueOf.Host, code)
 
 	fileName := file.FileName
 	if fileName == "" {
@@ -110,9 +111,20 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 		sizeStr = humanize.Bytes(uint64(file.FileSize))
 	}
 
+	lowerName := strings.ToLower(fileName)
 	isMedia := strings.Contains(file.MimeType, "video") ||
 		strings.Contains(file.MimeType, "audio") ||
-		strings.Contains(file.MimeType, "pdf")
+		strings.Contains(file.MimeType, "pdf") ||
+		strings.HasSuffix(lowerName, ".mp4") ||
+		strings.HasSuffix(lowerName, ".mkv") ||
+		strings.HasSuffix(lowerName, ".webm") ||
+		strings.HasSuffix(lowerName, ".avi") ||
+		strings.HasSuffix(lowerName, ".mov") ||
+		strings.HasSuffix(lowerName, ".mp3") ||
+		strings.HasSuffix(lowerName, ".m4a") ||
+		strings.HasSuffix(lowerName, ".flac") ||
+		strings.HasSuffix(lowerName, ".wav") ||
+		strings.HasSuffix(lowerName, ".ogg")
 
 	var responseText string
 	if isMedia {
@@ -120,9 +132,9 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 			"⚡ <b>FILE DEPLOYED SUCCESSFULLY</b>\n\n"+
 				"┌ 📁 <b>Name:</b> <code>%s</code>\n"+
 				"└ 📦 <b>Size:</b> <code>%s</code>\n\n"+
-				"🚀 <b>Direct Download Link:</b>\n<code>%s</code>\n\n"+
-				"🎬 <b>Online Stream Link:</b>\n<code>%s</code>\n\n"+
-				"💡 <i>Tip: Paste download link into IDM / ADM for maximum speed.</i>",
+				"🚀 <b>Download:</b> <a href=\"%s\">Click to Start Download</a>\n"+
+				"🎬 <b>Stream:</b> <a href=\"%s\">Click to Stream Online</a>\n\n"+
+				"💡 <i>Tap buttons below to stream or copy link:</i>",
 			html.EscapeString(fileName),
 			sizeStr,
 			downloadLink,
@@ -133,31 +145,51 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 			"⚡ <b>FILE DEPLOYED SUCCESSFULLY</b>\n\n"+
 				"┌ 📁 <b>Name:</b> <code>%s</code>\n"+
 				"└ 📦 <b>Size:</b> <code>%s</code>\n\n"+
-				"🚀 <b>Direct Download Link:</b>\n<code>%s</code>\n\n"+
-				"💡 <i>Tip: Paste download link into IDM / ADM for maximum speed.</i>",
+				"🚀 <b>Download:</b> <a href=\"%s\">Click to Start Download</a>\n\n"+
+				"💡 <i>Tap buttons below to start download or copy link:</i>",
 			html.EscapeString(fileName),
 			sizeStr,
 			downloadLink,
 		)
 	}
 
-	buttons := []tg.KeyboardButtonClass{
-		&tg.KeyboardButtonURL{
-			Text: "📥 Fast Download",
-			URL:  downloadLink,
-		},
-	}
+	var rows []tg.KeyboardButtonRow
 	if isMedia {
-		buttons = append(buttons, &tg.KeyboardButtonURL{
-			Text: "🎬 Stream Online",
-			URL:  streamLink,
+		rows = append(rows, tg.KeyboardButtonRow{
+			Buttons: []tg.KeyboardButtonClass{
+				&tg.KeyboardButtonURL{
+					Text: "🎬 Stream Online",
+					URL:  streamLink,
+				},
+				&tg.KeyboardButtonURL{
+					Text: "📥 Start Download",
+					URL:  downloadLink,
+				},
+			},
+		})
+	} else {
+		rows = append(rows, tg.KeyboardButtonRow{
+			Buttons: []tg.KeyboardButtonClass{
+				&tg.KeyboardButtonURL{
+					Text: "📥 Start Download",
+					URL:  downloadLink,
+				},
+			},
 		})
 	}
 
-	markup := &tg.ReplyInlineMarkup{
-		Rows: []tg.KeyboardButtonRow{
-			{Buttons: buttons},
+	// Full width copy button underneath
+	rows = append(rows, tg.KeyboardButtonRow{
+		Buttons: []tg.KeyboardButtonClass{
+			&tg.KeyboardButtonCopy{
+				Text:     "📋 Copy Download Link",
+				CopyText: downloadLink,
+			},
 		},
+	})
+
+	markup := &tg.ReplyInlineMarkup{
+		Rows: rows,
 	}
 
 	_, err = ctx.Reply(u, ext.ReplyTextStyledText(HTMLString(responseText)), &ext.ReplyOpts{

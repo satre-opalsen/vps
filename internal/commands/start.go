@@ -10,6 +10,10 @@ import (
 	"github.com/celestix/gotgproto/dispatcher"
 	"github.com/celestix/gotgproto/dispatcher/handlers"
 	"github.com/celestix/gotgproto/ext"
+	"github.com/celestix/gotgproto/functions"
+	"github.com/gotd/td/telegram/message/entity"
+	"github.com/gotd/td/telegram/message/styling"
+	"github.com/gotd/td/tg"
 )
 
 func (m *command) LoadStart(dispatcher dispatcher.Dispatcher) {
@@ -34,7 +38,7 @@ func start(ctx *ext.Context, u *ext.Update) error {
 	}
 
 	welcomeText := fmt.Sprintf(
-		"<a href=\"https://media.tenor.com/qxt16HtzOa4AAAAM/ghost-walk-show.gif\">&#8204;</a>"+
+		"<a href=\"https://media.tenor.com/wSlgxeeIIB4AAAA1/rei-da-aura-mais-ego.webp\">&#8204;</a>"+
 			"💀 <b>OPERATOR:</b> <code>%s</code>\n\n"+
 			"⚡ <b>High-Speed File Streaming & Link Engine</b>\n\n"+
 			"┌ 🚀 <b>Fast Downloads:</b> Multi-threaded direct streams\n"+
@@ -45,13 +49,37 @@ func start(ctx *ext.Context, u *ext.Update) error {
 		html.EscapeString(name),
 	)
 
-	opts := &ext.ReplyOpts{
-		NoWebpage: false,
+	var tb entity.Builder
+	if err := styling.Perform(&tb, HTMLString(welcomeText)); err != nil {
+		utils.Logger.Sugar().Errorf("styling error: %v", err)
+		return err
+	}
+	msgText, entities := tb.Complete()
+
+	peer := u.EffectiveChat().GetInputPeer()
+	if peer == nil {
+		peer = functions.GetInputPeerClassFromId(ctx.PeerStorage, chatId)
 	}
 
-	_, err := ctx.Reply(u, ext.ReplyTextStyledText(HTMLString(welcomeText)), opts)
+	var replyTo tg.InputReplyToClass
+	if u.EffectiveMessage != nil && u.EffectiveMessage.ID != 0 {
+		replyTo = &tg.InputReplyToMessage{ReplyToMsgID: u.EffectiveMessage.ID}
+	}
+
+	req := &tg.MessagesSendMessageRequest{
+		Peer:        peer,
+		Message:     msgText,
+		Entities:    entities,
+		InvertMedia: true,
+		ReplyTo:     replyTo,
+	}
+
+	_, err := ctx.SendMessage(chatId, req)
 	if err != nil {
-		utils.Logger.Sugar().Errorf("start reply error: %v", err)
+		utils.Logger.Sugar().Errorf("start SendMessage error: %v, falling back to ctx.Reply", err)
+		_, _ = ctx.Reply(u, ext.ReplyTextStyledText(HTMLString(welcomeText)), &ext.ReplyOpts{
+			NoWebpage: false,
+		})
 	}
 	return dispatcher.EndGroups
 }
