@@ -1,10 +1,8 @@
 services:
   - type: web
     name: tg-file-stream
-    runtime: python
+    runtime: docker
     plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: python main.py
     envVars:
       - key: API_ID
         sync: false
@@ -18,3 +16,8 @@ services:
         sync: false
       - key: FQDN
         sync: false
+      - key: SESSION_STRING
+        sync: false
+      - key: PORT
+        value: 10000
+    healthCheckPath: /
