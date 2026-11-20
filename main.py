@@ -28,13 +28,25 @@ CHUNK_SIZE = 1024 * 1024  # 1 MiB chunk size for streaming
 
 print(f"[INIT] Loaded Config: API_ID={API_ID}, BIN_CHANNEL={BIN_CHANNEL}, OWNER_ID={OWNER_ID}, FQDN={FQDN}, PORT={PORT}", flush=True)
 
-bot = Client(
-    "stream_bot",
-    api_id=API_ID,
-    api_hash=API_HASH,
-    bot_token=BOT_TOKEN,
-    in_memory=True
-)
+SESSION_STRING = os.environ.get("SESSION_STRING", "")
+
+bot_status = {"online": False, "error": None, "bot_username": None}
+
+if SESSION_STRING:
+    bot = Client(
+        "stream_bot",
+        api_id=API_ID,
+        api_hash=API_HASH,
+        session_string=SESSION_STRING
+    )
+else:
+    bot = Client(
+        "stream_bot",
+        api_id=API_ID,
+        api_hash=API_HASH,
+        bot_token=BOT_TOKEN,
+        in_memory=True
+    )
 
 def get_media_info(message: Message):
     media = (
@@ -76,7 +88,10 @@ routes = web.RouteTableDef()
 
 @routes.get("/")
 async def root_handler(request):
-    return web.Response(text="Bot is running! Ready to stream files.")
+    if bot_status["online"]:
+        return web.Response(text=f"✅ Bot is running as @{bot_status['bot_username']}! Ready to stream files.")
+    else:
+        return web.Response(status=503, text=f"⚠️ Telegram Bot is offline.\n\nError: {bot_status['error']}\n\nTip: If you see FloodWait, generate a new bot token on @BotFather using /revoke to reset the timer instantly.")
 
 @routes.get("/dl/{msg_id:\\d+}")
 @routes.get("/stream/{msg_id:\\d+}")
@@ -213,9 +228,15 @@ async def main():
     try:
         await bot.start()
         me = await bot.get_me()
+        session_str = await bot.export_session_string()
+        bot_status["online"] = True
+        bot_status["bot_username"] = me.username
         print(f"[STARTUP] ✅ Bot successfully connected as @{me.username} (ID: {me.id})", flush=True)
+        print(f"[STARTUP] 🔑 Permanent SESSION_STRING:\n{session_str}\n", flush=True)
     except Exception as e:
-        print(f"[STARTUP CRITICAL ERROR] Failed to start Telegram Bot: {e}", flush=True)
+        err_str = str(e)
+        bot_status["error"] = err_str
+        print(f"[STARTUP CRITICAL ERROR] Failed to start Telegram Bot: {err_str}", flush=True)
         traceback.print_exc()
 
     print(f"[STARTUP] Starting web server on port {PORT}...", flush=True)
