@@ -3,31 +3,28 @@ import re
 import asyncio
 import traceback
 import urllib.parse
+import time
 from aiohttp import web
 from dotenv import load_dotenv
 
-import time
-
-# Fix Telegram 64-bit Channel ID support in Pyrogram
 import pyrogram.utils
 pyrogram.utils.MIN_CHANNEL_ID = -10099999999999
 
-from pyrogram import Client, filters
+from pyrogram import Client
 from pyrogram.types import Message
 
-# Load .env file if present
 load_dotenv()
 
-API_ID = int(os.environ.get("API_ID", 0))
-API_HASH = os.environ.get("API_HASH", "")
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+API_ID      = int(os.environ.get("API_ID", 0))
+API_HASH    = os.environ.get("API_HASH", "")
+BOT_TOKEN   = os.environ.get("BOT_TOKEN", "")
 BIN_CHANNEL = int(os.environ.get("BIN_CHANNEL", 0))
-OWNER_ID = int(os.environ.get("OWNER_ID", 0))
-FQDN = os.environ.get("FQDN", "https://meow-onrender-003445.onrender.com").rstrip("/")
-PORT = int(os.environ.get("PORT", 10000))
+OWNER_ID    = int(os.environ.get("OWNER_ID", 0))
+FQDN        = os.environ.get("FQDN", "").rstrip("/")
+PORT        = int(os.environ.get("PORT", 10000))
 SESSION_STRING = os.environ.get("SESSION_STRING", "")
 
-CHUNK_SIZE = 1024 * 1024  # 1 MiB chunk size for streaming
+CHUNK_SIZE = 1024 * 1024
 
 bot_status = {
     "online": False,
@@ -36,21 +33,23 @@ bot_status = {
     "last_attempt": None
 }
 
-if SESSION_STRING:
-    bot = Client(
-        "stream_bot",
-        api_id=API_ID,
-        api_hash=API_HASH,
-        session_string=SESSION_STRING
-    )
-else:
-    bot = Client(
-        "stream_bot",
-        api_id=API_ID,
-        api_hash=API_HASH,
-        bot_token=BOT_TOKEN,
-        in_memory=True
-    )
+# Bot client — always uses BOT_TOKEN, handles messages
+bot = Client(
+    "bot_session",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    bot_token=BOT_TOKEN,
+    in_memory=True
+)
+
+# User client — uses SESSION_STRING for streaming files (higher limits)
+user = Client(
+    "user_session",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    session_string=SESSION_STRING
+) if SESSION_STRING else None
+
 
 def get_media_info(message: Message):
     media = (
@@ -63,16 +62,17 @@ def get_media_info(message: Message):
     )
     if not media:
         return None, None, None
-    file_name = getattr(media, "file_name", f"file_{message.id}")
-    file_size = getattr(media, "file_size", 0)
-    mime_type = getattr(media, "mime_type", "application/octet-stream")
+    file_name  = getattr(media, "file_name",  f"file_{message.id}")
+    file_size  = getattr(media, "file_size",  0)
+    mime_type  = getattr(media, "mime_type",  "application/octet-stream")
     return file_name, file_size, mime_type
 
+
 async def chunk_streamer(client: Client, message: Message, from_bytes: int, until_bytes: int):
-    offset_chunks = from_bytes // CHUNK_SIZE
+    offset_chunks      = from_bytes // CHUNK_SIZE
     skip_initial_bytes = from_bytes % CHUNK_SIZE
-    total_to_send = until_bytes - from_bytes + 1
-    sent_bytes = 0
+    total_to_send      = until_bytes - from_bytes + 1
+    sent_bytes         = 0
 
     async for chunk in client.stream_media(message, offset=offset_chunks):
         if skip_initial_bytes > 0:
@@ -88,36 +88,42 @@ async def chunk_streamer(client: Client, message: Message, from_bytes: int, unti
         if sent_bytes >= total_to_send:
             break
 
+
 routes = web.RouteTableDef()
+
 
 @routes.get("/")
 async def root_handler(request):
     if bot_status["online"]:
         return web.Response(text=f"✅ Bot is running as @{bot_status['bot_username']}! Ready to stream files.")
     else:
-        last = f" (Checked {int(time.time() - bot_status['last_attempt'])}s ago)" if bot_status.get('last_attempt') else ""
+        last = f" (Checked {int(time.time() - bot_status['last_attempt'])}s ago)" if bot_status.get("last_attempt") else ""
         return web.Response(
             status=200,
             text=(
                 f"⏳ Bot is waiting for Telegram cooldown to clear...\n\n"
                 f"Current Telegram Status{last}:\n{bot_status['error']}\n\n"
                 f"🔄 The server is automatically retrying every 30 seconds.\n"
-                f"As soon as Telegram's timer reaches 0, the bot will turn ONLINE automatically without needing a redeploy!"
+                f"As soon as Telegram's timer reaches 0, the bot will turn ONLINE automatically!"
             )
         )
+
 
 @routes.get("/dl/{msg_id:\\d+}")
 @routes.get("/stream/{msg_id:\\d+}")
 async def stream_handler(request):
-    msg_id = int(request.match_info["msg_id"])
+    msg_id      = int(request.match_info["msg_id"])
     is_download = request.path.startswith("/dl/")
 
+    # Use user client for streaming if available, else fall back to bot
+    stream_client = user if user else bot
+
     try:
-        msg = await bot.get_messages(chat_id=BIN_CHANNEL, message_ids=msg_id)
+        msg = await stream_client.get_messages(chat_id=BIN_CHANNEL, message_ids=msg_id)
         if not msg or msg.empty:
             return web.Response(status=404, text="File not found or deleted from storage channel.")
     except Exception as e:
-        print(f"[STREAM ERROR] Error retrieving message {msg_id}: {e}", flush=True)
+        print(f"[STREAM ERROR] {msg_id}: {e}", flush=True)
         return web.Response(status=500, text=f"Error retrieving message: {e}")
 
     file_name, file_size, mime_type = get_media_info(msg)
@@ -125,11 +131,11 @@ async def stream_handler(request):
         return web.Response(status=404, text="No media found in message.")
 
     quoted_filename = urllib.parse.quote(file_name)
-    disposition = "attachment" if is_download else "inline"
+    disposition     = "attachment" if is_download else "inline"
 
     headers = {
-        "Accept-Ranges": "bytes",
-        "Content-Type": mime_type,
+        "Accept-Ranges":     "bytes",
+        "Content-Type":      mime_type,
         "Content-Disposition": f'{disposition}; filename="{file_name}"; filename*=UTF-8\'\'{quoted_filename}',
     }
 
@@ -137,19 +143,18 @@ async def stream_handler(request):
     if range_header:
         match = re.search(r"bytes=(\d+)-(\d*)", range_header)
         if match:
-            from_bytes = int(match.group(1))
+            from_bytes  = int(match.group(1))
             until_bytes = int(match.group(2)) if match.group(2) else file_size - 1
 
             if from_bytes >= file_size or until_bytes >= file_size or from_bytes > until_bytes:
                 return web.Response(status=416, headers={"Content-Range": f"bytes */{file_size}"})
 
-            headers["Content-Range"] = f"bytes {from_bytes}-{until_bytes}/{file_size}"
+            headers["Content-Range"]  = f"bytes {from_bytes}-{until_bytes}/{file_size}"
             headers["Content-Length"] = str(until_bytes - from_bytes + 1)
 
             response = web.StreamResponse(status=206, headers=headers)
             await response.prepare(request)
-
-            async for chunk in chunk_streamer(bot, msg, from_bytes, until_bytes):
+            async for chunk in chunk_streamer(stream_client, msg, from_bytes, until_bytes):
                 await response.write(chunk)
             await response.write_eof()
             return response
@@ -157,23 +162,23 @@ async def stream_handler(request):
     headers["Content-Length"] = str(file_size)
     response = web.StreamResponse(status=200, headers=headers)
     await response.prepare(request)
-
-    async for chunk in chunk_streamer(bot, msg, 0, file_size - 1):
+    async for chunk in chunk_streamer(stream_client, msg, 0, file_size - 1):
         await response.write(chunk)
     await response.write_eof()
     return response
 
+
 @bot.on_message()
 async def master_message_handler(client: Client, message: Message):
-    user_id = message.from_user.id if message.from_user else (message.chat.id if message.chat else 0)
+    user_id    = message.from_user.id if message.from_user else (message.chat.id if message.chat else 0)
     first_name = message.from_user.first_name if message.from_user else "there"
     text_content = (message.text or message.caption or "").strip()
 
-    print(f"[BOT] Incoming message from {first_name} ({user_id}): text='{text_content}', media={bool(message.document or message.video or message.audio or message.photo or message.voice)}", flush=True)
+    print(f"[BOT] From {first_name} ({user_id}): '{text_content}', media={bool(message.document or message.video or message.audio or message.photo or message.voice)}", flush=True)
 
-    # 1. Handle /start command
+    # /start
     if text_content.startswith("/start"):
-        welcome_text = (
+        await message.reply(
             f"👋 **Hey {first_name}! Welcome to your File to Link Bot!**\n\n"
             f"⚡ **Fast Direct Download & Streaming Engine**\n\n"
             f"✨ **What I can do:**\n"
@@ -183,14 +188,14 @@ async def master_message_handler(client: Client, message: Message):
             f"• 🔒 Private cloud storage powered by your Telegram Channel\n\n"
             f"👤 **Your User ID:** `{user_id}`\n\n"
             f"📤 **Get Started:**\n"
-            f"Simply send or forward any document, video, or audio file here right now!"
+            f"Simply send or forward any document, video, or audio file here right now!",
+            disable_web_page_preview=True
         )
-        await message.reply(welcome_text, disable_web_page_preview=True)
         return
 
-    # 2. Check Owner Authorization
+    # Owner check
     if OWNER_ID and user_id != OWNER_ID:
-        print(f"[AUTH DENIED] User {user_id} does not match OWNER_ID {OWNER_ID}", flush=True)
+        print(f"[AUTH DENIED] {user_id} != OWNER_ID {OWNER_ID}", flush=True)
         await message.reply(
             f"⛔ **Access Denied!**\n\n"
             f"Your Telegram ID: `{user_id}`\n"
@@ -199,7 +204,7 @@ async def master_message_handler(client: Client, message: Message):
         )
         return
 
-    # 3. Handle File / Media
+    # File handling
     media = (
         message.document
         or message.video
@@ -212,39 +217,48 @@ async def master_message_handler(client: Client, message: Message):
     if media:
         status = await message.reply("⏳ Processing file, please wait...")
         try:
-            print(f"[STORAGE] Copying media to channel {BIN_CHANNEL}...", flush=True)
+            print(f"[STORAGE] Copying to channel {BIN_CHANNEL}...", flush=True)
             stored_msg = await message.copy(chat_id=BIN_CHANNEL)
-            msg_id = stored_msg.id
+            msg_id     = stored_msg.id
 
             file_name, file_size, _ = get_media_info(message)
-            size_mb = f"{file_size / (1024 * 1024):.2f} MB"
-
+            size_mb  = f"{file_size / (1024 * 1024):.2f} MB"
             base_url = FQDN if FQDN else f"http://localhost:{PORT}"
-            dl_link = f"{base_url}/dl/{msg_id}"
+            dl_link     = f"{base_url}/dl/{msg_id}"
             stream_link = f"{base_url}/stream/{msg_id}"
 
-            response_text = (
+            await status.edit(
                 f"**File Ready!**\n\n"
                 f"📁 **Name:** `{file_name}`\n"
                 f"📦 **Size:** `{size_mb}`\n\n"
                 f"🚀 **Fast Download Link:**\n`{dl_link}`\n\n"
-                f"▶️ **Stream / Play Online:**\n`{stream_link}`"
+                f"▶️ **Stream / Play Online:**\n`{stream_link}`",
+                disable_web_page_preview=True
             )
-            await status.edit(response_text, disable_web_page_preview=True)
-            print(f"[SUCCESS] File saved! msg_id={msg_id}, download_link={dl_link}", flush=True)
+            print(f"[SUCCESS] msg_id={msg_id}, link={dl_link}", flush=True)
         except Exception as e:
-            err_msg = str(e)
-            print(f"[ERROR] Failed to save file: {err_msg}", flush=True)
             traceback.print_exc()
             await status.edit(
                 f"❌ **Error saving file to channel:**\n\n"
-                f"`{err_msg}`\n\n"
+                f"`{str(e)}`\n\n"
                 f"💡 **Tip:** Make sure the bot is an **Admin** in the storage channel (`{BIN_CHANNEL}`)."
             )
         return
 
-    # 4. Fallback for any plain text
     await message.reply("Please send or forward a **document, video, or audio file** to get a download link.")
+
+
+async def keepalive():
+    import aiohttp
+    while True:
+        await asyncio.sleep(600)
+        try:
+            async with aiohttp.ClientSession() as session:
+                await session.get(FQDN if FQDN else f"http://localhost:{PORT}")
+            print("[KEEPALIVE] pinged self", flush=True)
+        except Exception as e:
+            print(f"[KEEPALIVE] failed: {e}", flush=True)
+
 
 async def bot_starter():
     while not bot_status["online"]:
@@ -252,19 +266,26 @@ async def bot_starter():
         print("[STARTUP] Attempting to connect Telegram Bot...", flush=True)
         try:
             await bot.start()
+            if user:
+                await user.start()
+                print("[STARTUP] ✅ User session connected for streaming", flush=True)
+
             me = await bot.get_me()
-            session_str = await bot.export_session_string()
-            bot_status["online"] = True
+            bot_status["online"]       = True
             bot_status["bot_username"] = me.username
-            bot_status["error"] = None
-            print(f"[STARTUP] ✅ Bot successfully connected as @{me.username} (ID: {me.id})", flush=True)
-            print(f"[STARTUP] 🔑 Permanent SESSION_STRING:\n{session_str}\n", flush=True)
+            bot_status["error"]        = None
+            print(f"[STARTUP] ✅ Bot connected as @{me.username} (ID: {me.id})", flush=True)
+
+            # Print fresh session string if no SESSION_STRING set
+            if not SESSION_STRING:
+                session_str = await bot.export_session_string()
+                print(f"[STARTUP] 🔑 Permanent SESSION_STRING:\n{session_str}\n", flush=True)
             break
         except Exception as e:
-            err_str = str(e)
-            bot_status["error"] = err_str
-            print(f"[RETRY] Connection pending ({err_str}). Retrying in 30s...", flush=True)
+            bot_status["error"] = str(e)
+            print(f"[RETRY] Connection pending ({e}). Retrying in 30s...", flush=True)
             await asyncio.sleep(30)
+
 
 async def main():
     print(f"[STARTUP] Starting web server on port {PORT}...", flush=True)
@@ -276,11 +297,11 @@ async def main():
     await site.start()
     print(f"[STARTUP] ✅ Web server running on port {PORT}", flush=True)
 
-    # Run bot starter in background with auto-retry
     asyncio.create_task(bot_starter())
+    asyncio.create_task(keepalive())
 
     await asyncio.Event().wait()
 
+
 if __name__ == "__main__":
     asyncio.run(main())
-
