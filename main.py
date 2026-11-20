@@ -163,31 +163,32 @@ async def stream_handler(request):
     await response.write_eof()
     return response
 
-@bot.on_message(filters.command("start") & filters.private)
-async def start_command(client: Client, message: Message):
-    user_id = message.from_user.id if message.from_user else message.chat.id
+@bot.on_message()
+async def master_message_handler(client: Client, message: Message):
+    user_id = message.from_user.id if message.from_user else (message.chat.id if message.chat else 0)
     first_name = message.from_user.first_name if message.from_user else "there"
-    print(f"[BOT] Received /start from User: {first_name} (ID: {user_id})", flush=True)
+    text_content = (message.text or message.caption or "").strip()
 
-    welcome_text = (
-        f"👋 **Hey {first_name}! Welcome to your File to Link Bot!**\n\n"
-        f"⚡ **Fast Direct Download & Streaming Engine**\n\n"
-        f"✨ **What I can do:**\n"
-        f"• 🚀 Generate permanent, high-speed direct download links (up to **2 GB**)\n"
-        f"• ▶️ Online video/audio streaming with instant seeking\n"
-        f"• 📥 Resume support for download managers (IDM, ADM, curl)\n"
-        f"• 🔒 Private cloud storage powered by your Telegram Channel\n\n"
-        f"👤 **Your User ID:** `{user_id}`\n\n"
-        f"📤 **Get Started:**\n"
-        f"Simply send or forward any document, video, or audio file here right now!"
-    )
-    await message.reply(welcome_text, disable_web_page_preview=True)
+    print(f"[BOT] Incoming message from {first_name} ({user_id}): text='{text_content}', media={bool(message.document or message.video or message.audio or message.photo or message.voice)}", flush=True)
 
-@bot.on_message(filters.private & (filters.document | filters.video | filters.audio | filters.photo | filters.voice))
-async def handle_incoming_file(client: Client, message: Message):
-    user_id = message.from_user.id if message.from_user else message.chat.id
-    print(f"[BOT] Received file from User ID: {user_id}", flush=True)
+    # 1. Handle /start command
+    if text_content.startswith("/start"):
+        welcome_text = (
+            f"👋 **Hey {first_name}! Welcome to your File to Link Bot!**\n\n"
+            f"⚡ **Fast Direct Download & Streaming Engine**\n\n"
+            f"✨ **What I can do:**\n"
+            f"• 🚀 Generate permanent, high-speed direct download links (up to **2 GB**)\n"
+            f"• ▶️ Online video/audio streaming with instant seeking\n"
+            f"• 📥 Resume support for download managers (IDM, ADM, curl)\n"
+            f"• 🔒 Private cloud storage powered by your Telegram Channel\n\n"
+            f"👤 **Your User ID:** `{user_id}`\n\n"
+            f"📤 **Get Started:**\n"
+            f"Simply send or forward any document, video, or audio file here right now!"
+        )
+        await message.reply(welcome_text, disable_web_page_preview=True)
+        return
 
+    # 2. Check Owner Authorization
     if OWNER_ID and user_id != OWNER_ID:
         print(f"[AUTH DENIED] User {user_id} does not match OWNER_ID {OWNER_ID}", flush=True)
         await message.reply(
@@ -198,42 +199,51 @@ async def handle_incoming_file(client: Client, message: Message):
         )
         return
 
-    status = await message.reply("⏳ Processing file, please wait...")
-    try:
-        print(f"[STORAGE] Copying media to channel {BIN_CHANNEL}...", flush=True)
-        stored_msg = await message.copy(chat_id=BIN_CHANNEL)
-        msg_id = stored_msg.id
+    # 3. Handle File / Media
+    media = (
+        message.document
+        or message.video
+        or message.audio
+        or message.photo
+        or message.voice
+        or message.video_note
+    )
 
-        file_name, file_size, _ = get_media_info(message)
-        size_mb = f"{file_size / (1024 * 1024):.2f} MB"
+    if media:
+        status = await message.reply("⏳ Processing file, please wait...")
+        try:
+            print(f"[STORAGE] Copying media to channel {BIN_CHANNEL}...", flush=True)
+            stored_msg = await message.copy(chat_id=BIN_CHANNEL)
+            msg_id = stored_msg.id
 
-        base_url = FQDN if FQDN else f"http://localhost:{PORT}"
-        dl_link = f"{base_url}/dl/{msg_id}"
-        stream_link = f"{base_url}/stream/{msg_id}"
+            file_name, file_size, _ = get_media_info(message)
+            size_mb = f"{file_size / (1024 * 1024):.2f} MB"
 
-        response_text = (
-            f"**File Ready!**\n\n"
-            f"📁 **Name:** `{file_name}`\n"
-            f"📦 **Size:** `{size_mb}`\n\n"
-            f"🚀 **Fast Download Link:**\n`{dl_link}`\n\n"
-            f"▶️ **Stream / Play Online:**\n`{stream_link}`"
-        )
-        await status.edit(response_text, disable_web_page_preview=True)
-        print(f"[SUCCESS] File saved! msg_id={msg_id}, download_link={dl_link}", flush=True)
-    except Exception as e:
-        err_msg = str(e)
-        print(f"[ERROR] Failed to save file: {err_msg}", flush=True)
-        traceback.print_exc()
-        await status.edit(
-            f"❌ **Error saving file to channel:**\n\n"
-            f"`{err_msg}`\n\n"
-            f"💡 **Tip:** Make sure the bot is an **Admin** in the storage channel (`{BIN_CHANNEL}`)."
-        )
+            base_url = FQDN if FQDN else f"http://localhost:{PORT}"
+            dl_link = f"{base_url}/dl/{msg_id}"
+            stream_link = f"{base_url}/stream/{msg_id}"
 
-@bot.on_message(filters.private & filters.text)
-async def handle_plain_text(client: Client, message: Message):
-    user_id = message.from_user.id if message.from_user else message.chat.id
-    print(f"[BOT] Received text from User ID: {user_id}: {message.text}", flush=True)
+            response_text = (
+                f"**File Ready!**\n\n"
+                f"📁 **Name:** `{file_name}`\n"
+                f"📦 **Size:** `{size_mb}`\n\n"
+                f"🚀 **Fast Download Link:**\n`{dl_link}`\n\n"
+                f"▶️ **Stream / Play Online:**\n`{stream_link}`"
+            )
+            await status.edit(response_text, disable_web_page_preview=True)
+            print(f"[SUCCESS] File saved! msg_id={msg_id}, download_link={dl_link}", flush=True)
+        except Exception as e:
+            err_msg = str(e)
+            print(f"[ERROR] Failed to save file: {err_msg}", flush=True)
+            traceback.print_exc()
+            await status.edit(
+                f"❌ **Error saving file to channel:**\n\n"
+                f"`{err_msg}`\n\n"
+                f"💡 **Tip:** Make sure the bot is an **Admin** in the storage channel (`{BIN_CHANNEL}`)."
+            )
+        return
+
+    # 4. Fallback for any plain text
     await message.reply("Please send or forward a **document, video, or audio file** to get a download link.")
 
 async def bot_starter():
