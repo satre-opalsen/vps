@@ -11,10 +11,8 @@ import (
 	"github.com/celestix/gotgproto/dispatcher"
 	"github.com/celestix/gotgproto/dispatcher/handlers"
 	"github.com/celestix/gotgproto/ext"
-	"github.com/celestix/gotgproto/storage"
 	"github.com/celestix/gotgproto/types"
 	"github.com/dustin/go-humanize"
-	tghtml "github.com/gotd/td/telegram/message/html"
 	"github.com/gotd/td/tg"
 )
 
@@ -43,11 +41,10 @@ func supportedMediaFilter(m *types.Message) (bool, error) {
 }
 
 func sendLink(ctx *ext.Context, u *ext.Update) error {
-	chatId := u.EffectiveChat().GetID()
-	peerChatId := ctx.PeerStorage.GetPeerById(chatId)
-	if peerChatId.Type != int(storage.TypeUser) {
+	if !u.EffectiveChat().IsAUser() {
 		return dispatcher.EndGroups
 	}
+	chatId := u.EffectiveChat().GetID()
 	if len(config.ValueOf.AllowedUsers) != 0 && !utils.Contains(config.ValueOf.AllowedUsers, chatId) {
 		ctx.Reply(u, ext.ReplyTextString("⛔ You are not authorized to use this bot."), nil)
 		return dispatcher.EndGroups
@@ -164,20 +161,20 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 	}
 
 	if strings.Contains(link, "http://localhost") {
-		_, err = ctx.Reply(u, ext.ReplyTextStyledText(tghtml.String(nil, responseText)), &ext.ReplyOpts{
+		_, err = ctx.Reply(u, ext.ReplyTextStyledText(HTMLString(responseText)), &ext.ReplyOpts{
 			NoWebpage:        true,
 			ReplyToMessageId: u.EffectiveMessage.ID,
 		})
 	} else {
-		_, err = ctx.Reply(u, ext.ReplyTextStyledText(tghtml.String(nil, responseText)), &ext.ReplyOpts{
+		_, err = ctx.Reply(u, ext.ReplyTextStyledText(HTMLString(responseText)), &ext.ReplyOpts{
 			Markup:           markup,
 			NoWebpage:        true,
 			ReplyToMessageId: u.EffectiveMessage.ID,
 		})
 	}
 	if err != nil {
-		utils.Logger.Sugar().Error(err)
-		ctx.Reply(u, ext.ReplyTextString(fmt.Sprintf("Error - %s", err.Error())), nil)
+		utils.Logger.Sugar().Errorf("sendLink reply error: %v", err)
+		ctx.Reply(u, ext.ReplyTextString(fmt.Sprintf("❌ Error: %s", err.Error())), nil)
 	}
 	return dispatcher.EndGroups
 }
