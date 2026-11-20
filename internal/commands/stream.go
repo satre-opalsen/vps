@@ -153,24 +153,11 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 			URL:  streamLink,
 		})
 	}
-	rows := []tg.KeyboardButtonRow{
-		{Buttons: buttons},
-	}
-	if config.ValueOf.Host != "" {
-		hostTitle := strings.TrimPrefix(config.ValueOf.Host, "https://")
-		hostTitle = strings.TrimPrefix(hostTitle, "http://")
-		rows = append(rows, tg.KeyboardButtonRow{
-			Buttons: []tg.KeyboardButtonClass{
-				&tg.KeyboardButtonURL{
-					Text: fmt.Sprintf("🌐 %s", hostTitle),
-					URL:  config.ValueOf.Host,
-				},
-			},
-		})
-	}
 
 	markup := &tg.ReplyInlineMarkup{
-		Rows: rows,
+		Rows: []tg.KeyboardButtonRow{
+			{Buttons: buttons},
+		},
 	}
 
 	_, err = ctx.Reply(u, ext.ReplyTextStyledText(HTMLString(responseText)), &ext.ReplyOpts{
