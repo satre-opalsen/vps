@@ -16,7 +16,7 @@ API_HASH = os.environ.get("API_HASH", "")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 BIN_CHANNEL = int(os.environ.get("BIN_CHANNEL", 0))
 OWNER_ID = int(os.environ.get("OWNER_ID", 0))
-FQDN = os.environ.get("FQDN", "").rstrip("/")
+FQDN = os.environ.get("FQDN", "https://meow-onrender-003445.onrender.com").rstrip("/")
 PORT = int(os.environ.get("PORT", 10000))
 
 CHUNK_SIZE = 1024 * 1024  # 1 MiB chunk size for streaming
@@ -133,12 +133,22 @@ async def stream_handler(request):
 @bot.on_message(filters.command("start") & filters.private)
 async def start_command(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else message.chat.id
-    print(f"[BOT] Received /start from User ID: {user_id}", flush=True)
-    await message.reply(
-        f"👋 **Welcome!**\n\n"
-        f"Your User ID is: `{user_id}`\n\n"
-        "Send or forward any document, video, or audio file up to **2 GB** to get instant direct download and streaming links."
+    first_name = message.from_user.first_name if message.from_user else "there"
+    print(f"[BOT] Received /start from User: {first_name} (ID: {user_id})", flush=True)
+
+    welcome_text = (
+        f"👋 **Hey {first_name}! Welcome to your File to Link Bot!**\n\n"
+        f"⚡ **Fast Direct Download & Streaming Engine**\n\n"
+        f"✨ **What I can do:**\n"
+        f"• 🚀 Generate permanent, high-speed direct download links (up to **2 GB**)\n"
+        f"• ▶️ Online video/audio streaming with instant seeking\n"
+        f"• 📥 Resume support for download managers (IDM, ADM, curl)\n"
+        f"• 🔒 Private cloud storage powered by your Telegram Channel\n\n"
+        f"👤 **Your User ID:** `{user_id}`\n\n"
+        f"📤 **Get Started:**\n"
+        f"Simply send or forward any document, video, or audio file here right now!"
     )
+    await message.reply(welcome_text, disable_web_page_preview=True)
 
 @bot.on_message(filters.private & (filters.document | filters.video | filters.audio | filters.photo | filters.voice))
 async def handle_incoming_file(client: Client, message: Message):
