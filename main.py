@@ -97,7 +97,7 @@ async def root_handler(request):
     else:
         last = f" (Checked {int(time.time() - bot_status['last_attempt'])}s ago)" if bot_status.get('last_attempt') else ""
         return web.Response(
-            status=503,
+            status=200,
             text=(
                 f"⏳ Bot is waiting for Telegram cooldown to clear...\n\n"
                 f"Current Telegram Status{last}:\n{bot_status['error']}\n\n"
