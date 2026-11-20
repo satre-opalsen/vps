@@ -46,7 +46,7 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 	}
 	chatId := u.EffectiveChat().GetID()
 	if len(config.ValueOf.AllowedUsers) != 0 && !utils.Contains(config.ValueOf.AllowedUsers, chatId) {
-		ctx.Reply(u, ext.ReplyTextString("⛔ You are not authorized to use this bot."), nil)
+		ctx.Reply(u, ext.ReplyTextString("⛔ ACCESS DENIED // Unauthorized Operator."), nil)
 		return dispatcher.EndGroups
 	}
 	supported, err := supportedMediaFilter(u.EffectiveMessage)
@@ -60,33 +60,33 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 	update, err := utils.ForwardMessages(ctx, chatId, config.ValueOf.LogChannelID, u.EffectiveMessage.ID)
 	if err != nil {
 		utils.Logger.Sugar().Error(err)
-		ctx.Reply(u, ext.ReplyTextString(fmt.Sprintf("❌ Error storing file: %s", err.Error())), nil)
+		ctx.Reply(u, ext.ReplyTextString(fmt.Sprintf("❌ Storage Error: %s", err.Error())), nil)
 		return dispatcher.EndGroups
 	}
 	if len(update.Updates) < 2 {
-		ctx.Reply(u, ext.ReplyTextString("❌ Error: unexpected update structure from Telegram."), nil)
+		ctx.Reply(u, ext.ReplyTextString("❌ Unexpected Telegram update structure."), nil)
 		return dispatcher.EndGroups
 	}
 	msgIDUpdate, ok := update.Updates[0].(*tg.UpdateMessageID)
 	if !ok {
-		ctx.Reply(u, ext.ReplyTextString("❌ Error: unexpected update type."), nil)
+		ctx.Reply(u, ext.ReplyTextString("❌ Unexpected update message ID."), nil)
 		return dispatcher.EndGroups
 	}
 	messageID := msgIDUpdate.ID
 	newMsg, ok := update.Updates[1].(*tg.UpdateNewChannelMessage)
 	if !ok {
-		ctx.Reply(u, ext.ReplyTextString("❌ Error: unexpected channel message update."), nil)
+		ctx.Reply(u, ext.ReplyTextString("❌ Unexpected channel message update."), nil)
 		return dispatcher.EndGroups
 	}
 	msg, ok := newMsg.Message.(*tg.Message)
 	if !ok {
-		ctx.Reply(u, ext.ReplyTextString("❌ Error: unexpected message structure."), nil)
+		ctx.Reply(u, ext.ReplyTextString("❌ Unexpected message type."), nil)
 		return dispatcher.EndGroups
 	}
 	doc := msg.Media
 	file, err := utils.FileFromMedia(doc)
 	if err != nil {
-		ctx.Reply(u, ext.ReplyTextString(fmt.Sprintf("❌ Error reading media: %s", err.Error())), nil)
+		ctx.Reply(u, ext.ReplyTextString(fmt.Sprintf("❌ Media extraction error: %s", err.Error())), nil)
 		return dispatcher.EndGroups
 	}
 	fullHash := utils.PackFile(
@@ -117,12 +117,12 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 	var responseText string
 	if isMedia {
 		responseText = fmt.Sprintf(
-			"⚡ <b>File Ready!</b>\n\n"+
-				"📁 <b>Name:</b> <code>%s</code>\n"+
-				"📦 <b>Size:</b> <code>%s</code>\n\n"+
+			"⚡ <b>FILE DEPLOYED SUCCESSFULLY</b>\n\n"+
+				"┌ 📁 <b>Name:</b> <code>%s</code>\n"+
+				"└ 📦 <b>Size:</b> <code>%s</code>\n\n"+
 				"🚀 <b>Direct Download Link:</b>\n<code>%s</code>\n\n"+
-				"🎬 <b>Fast Online Stream:</b>\n<code>%s</code>\n\n"+
-				"💡 <i>Tip: Paste the direct download link into IDM / ADM for maximum speed.</i>",
+				"🎬 <b>Online Stream Link:</b>\n<code>%s</code>\n\n"+
+				"💡 <i>Tip: Paste download link into IDM / ADM for maximum speed.</i>",
 			html.EscapeString(fileName),
 			sizeStr,
 			downloadLink,
@@ -130,11 +130,11 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 		)
 	} else {
 		responseText = fmt.Sprintf(
-			"⚡ <b>File Ready!</b>\n\n"+
-				"📁 <b>Name:</b> <code>%s</code>\n"+
-				"📦 <b>Size:</b> <code>%s</code>\n\n"+
+			"⚡ <b>FILE DEPLOYED SUCCESSFULLY</b>\n\n"+
+				"┌ 📁 <b>Name:</b> <code>%s</code>\n"+
+				"└ 📦 <b>Size:</b> <code>%s</code>\n\n"+
 				"🚀 <b>Direct Download Link:</b>\n<code>%s</code>\n\n"+
-				"💡 <i>Tip: Paste the direct download link into IDM / ADM for maximum speed.</i>",
+				"💡 <i>Tip: Paste download link into IDM / ADM for maximum speed.</i>",
 			html.EscapeString(fileName),
 			sizeStr,
 			downloadLink,
@@ -149,29 +149,35 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 	}
 	if isMedia {
 		buttons = append(buttons, &tg.KeyboardButtonURL{
-			Text: "🎬 Stream / Watch",
+			Text: "🎬 Stream Online",
 			URL:  streamLink,
 		})
 	}
-	row := tg.KeyboardButtonRow{
-		Buttons: buttons,
+	rows := []tg.KeyboardButtonRow{
+		{Buttons: buttons},
 	}
-	markup := &tg.ReplyInlineMarkup{
-		Rows: []tg.KeyboardButtonRow{row},
+	if config.ValueOf.Host != "" {
+		hostTitle := strings.TrimPrefix(config.ValueOf.Host, "https://")
+		hostTitle = strings.TrimPrefix(hostTitle, "http://")
+		rows = append(rows, tg.KeyboardButtonRow{
+			Buttons: []tg.KeyboardButtonClass{
+				&tg.KeyboardButtonURL{
+					Text: fmt.Sprintf("🌐 %s", hostTitle),
+					URL:  config.ValueOf.Host,
+				},
+			},
+		})
 	}
 
-	if strings.Contains(link, "http://localhost") {
-		_, err = ctx.Reply(u, ext.ReplyTextStyledText(HTMLString(responseText)), &ext.ReplyOpts{
-			NoWebpage:        true,
-			ReplyToMessageId: u.EffectiveMessage.ID,
-		})
-	} else {
-		_, err = ctx.Reply(u, ext.ReplyTextStyledText(HTMLString(responseText)), &ext.ReplyOpts{
-			Markup:           markup,
-			NoWebpage:        true,
-			ReplyToMessageId: u.EffectiveMessage.ID,
-		})
+	markup := &tg.ReplyInlineMarkup{
+		Rows: rows,
 	}
+
+	_, err = ctx.Reply(u, ext.ReplyTextStyledText(HTMLString(responseText)), &ext.ReplyOpts{
+		Markup:           markup,
+		NoWebpage:        true,
+		ReplyToMessageId: u.EffectiveMessage.ID,
+	})
 	if err != nil {
 		utils.Logger.Sugar().Errorf("sendLink reply error: %v", err)
 		ctx.Reply(u, ext.ReplyTextString(fmt.Sprintf("❌ Error: %s", err.Error())), nil)

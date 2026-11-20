@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"html"
+	"strings"
 
 	"EverythingSuckz/fsb/config"
 	"EverythingSuckz/fsb/internal/utils"
@@ -10,6 +11,7 @@ import (
 	"github.com/celestix/gotgproto/dispatcher"
 	"github.com/celestix/gotgproto/dispatcher/handlers"
 	"github.com/celestix/gotgproto/ext"
+	"github.com/gotd/td/tg"
 )
 
 func (m *command) LoadStart(dispatcher dispatcher.Dispatcher) {
@@ -24,32 +26,49 @@ func start(ctx *ext.Context, u *ext.Update) error {
 	}
 	chatId := u.EffectiveChat().GetID()
 	if len(config.ValueOf.AllowedUsers) != 0 && !utils.Contains(config.ValueOf.AllowedUsers, chatId) {
-		ctx.Reply(u, ext.ReplyTextString("⛔ You are not authorized to use this bot."), nil)
+		ctx.Reply(u, ext.ReplyTextString("⛔ ACCESS DENIED // Unauthorized Operator."), nil)
 		return dispatcher.EndGroups
 	}
 
-	name := "there"
+	name := "OPERATOR"
 	if u.EffectiveUser() != nil && u.EffectiveUser().FirstName != "" {
 		name = u.EffectiveUser().FirstName
 	}
 
 	welcomeText := fmt.Sprintf(
-		"👋 <b>Hey %s! Welcome to File to Link Bot</b>\n\n"+
-			"⚡ <b>High-Speed Direct Link & Streaming Engine</b>\n\n"+
-			"Send or forward any Telegram media or document to generate permanent, fast HTTP download and stream links.\n\n"+
-			"✨ <b>Key Features:</b>\n"+
-			"• 🚀 <b>Fast Downloads:</b> Multi-threaded direct HTTP download links\n"+
-			"• 🎬 <b>Web Streaming:</b> Watch videos & listen to audio directly online\n"+
-			"• 📥 <b>Resume Support:</b> Compatible with IDM, ADM, curl, and wget\n"+
-			"• 📦 <b>File Support:</b> Videos, Music, Documents, and Files up to 2 GB\n\n"+
-			"📤 <b>Get Started:</b>\n"+
-			"Simply <b>send or forward any file</b> here right now!",
+		"<a href=\"https://media.tenor.com/AmZv66Mg1DYAAAAM/ghost-call-of-duty.gif\">&#8204;</a>"+
+			"💀 <b>OPERATOR:</b> <code>%s</code>\n\n"+
+			"⚡ <b>High-Speed File Streaming & Link Engine</b>\n\n"+
+			"┌ 🚀 <b>Fast Downloads:</b> Multi-threaded direct streams\n"+
+			"├ 🎬 <b>Web Streaming:</b> Online player (VLC / MX Player)\n"+
+			"├ 📥 <b>Resume Support:</b> Compatible with IDM, ADM & curl\n"+
+			"└ 📦 <b>File Limit:</b> Up to 2 GB per file\n\n"+
+			"📤 <b>Send or forward any file below to generate a link.</b>",
 		html.EscapeString(name),
 	)
 
-	_, err := ctx.Reply(u, ext.ReplyTextStyledText(HTMLString(welcomeText)), &ext.ReplyOpts{
-		NoWebpage: true,
-	})
+	var rows []tg.KeyboardButtonRow
+	if config.ValueOf.Host != "" {
+		hostTitle := strings.TrimPrefix(config.ValueOf.Host, "https://")
+		hostTitle = strings.TrimPrefix(hostTitle, "http://")
+		rows = append(rows, tg.KeyboardButtonRow{
+			Buttons: []tg.KeyboardButtonClass{
+				&tg.KeyboardButtonURL{
+					Text: fmt.Sprintf("🌐 %s", hostTitle),
+					URL:  config.ValueOf.Host,
+				},
+			},
+		})
+	}
+
+	opts := &ext.ReplyOpts{
+		NoWebpage: false,
+	}
+	if len(rows) > 0 {
+		opts.Markup = &tg.ReplyInlineMarkup{Rows: rows}
+	}
+
+	_, err := ctx.Reply(u, ext.ReplyTextStyledText(HTMLString(welcomeText)), opts)
 	if err != nil {
 		utils.Logger.Sugar().Errorf("start reply error: %v", err)
 	}
