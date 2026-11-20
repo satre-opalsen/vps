@@ -1,6 +1,7 @@
 import os
 import re
 import asyncio
+import traceback
 import urllib.parse
 from aiohttp import web
 from dotenv import load_dotenv
@@ -19,6 +20,8 @@ FQDN = os.environ.get("FQDN", "").rstrip("/")
 PORT = int(os.environ.get("PORT", 10000))
 
 CHUNK_SIZE = 1024 * 1024  # 1 MiB chunk size for streaming
+
+print(f"[INIT] Loaded Config: API_ID={API_ID}, BIN_CHANNEL={BIN_CHANNEL}, OWNER_ID={OWNER_ID}, FQDN={FQDN}, PORT={PORT}", flush=True)
 
 bot = Client(
     "stream_bot",
@@ -81,6 +84,7 @@ async def stream_handler(request):
         if not msg or msg.empty:
             return web.Response(status=404, text="File not found or deleted from storage channel.")
     except Exception as e:
+        print(f"[STREAM ERROR] Error retrieving message {msg_id}: {e}", flush=True)
         return web.Response(status=500, text=f"Error retrieving message: {e}")
 
     file_name, file_size, mime_type = get_media_info(msg)
@@ -98,7 +102,6 @@ async def stream_handler(request):
 
     range_header = request.headers.get("Range")
     if range_header:
-        # HTTP 206 Partial Content (Supports video seeking & IDM/download resume)
         match = re.search(r"bytes=(\d+)-(\d*)", range_header)
         if match:
             from_bytes = int(match.group(1))
@@ -118,7 +121,6 @@ async def stream_handler(request):
             await response.write_eof()
             return response
 
-    # HTTP 200 Full Content
     headers["Content-Length"] = str(file_size)
     response = web.StreamResponse(status=200, headers=headers)
     await response.prepare(request)
@@ -128,15 +130,34 @@ async def stream_handler(request):
     await response.write_eof()
     return response
 
+@bot.on_message(filters.command("start") & filters.private)
+async def start_command(client: Client, message: Message):
+    user_id = message.from_user.id if message.from_user else message.chat.id
+    print(f"[BOT] Received /start from User ID: {user_id}", flush=True)
+    await message.reply(
+        f"👋 **Welcome!**\n\n"
+        f"Your User ID is: `{user_id}`\n\n"
+        "Send or forward any document, video, or audio file up to **2 GB** to get instant direct download and streaming links."
+    )
+
 @bot.on_message(filters.private & (filters.document | filters.video | filters.audio | filters.photo | filters.voice))
 async def handle_incoming_file(client: Client, message: Message):
-    if OWNER_ID and message.from_user.id != OWNER_ID:
-        await message.reply("Access denied. This bot is private.")
+    user_id = message.from_user.id if message.from_user else message.chat.id
+    print(f"[BOT] Received file from User ID: {user_id}", flush=True)
+
+    if OWNER_ID and user_id != OWNER_ID:
+        print(f"[AUTH DENIED] User {user_id} does not match OWNER_ID {OWNER_ID}", flush=True)
+        await message.reply(
+            f"⛔ **Access Denied!**\n\n"
+            f"Your Telegram ID: `{user_id}`\n"
+            f"Configured OWNER_ID: `{OWNER_ID}`\n\n"
+            "This bot is private."
+        )
         return
 
     status = await message.reply("⏳ Processing file, please wait...")
     try:
-        # Forward/copy to private bin channel
+        print(f"[STORAGE] Copying media to channel {BIN_CHANNEL}...", flush=True)
         stored_msg = await message.copy(chat_id=BIN_CHANNEL)
         msg_id = stored_msg.id
 
@@ -155,29 +176,44 @@ async def handle_incoming_file(client: Client, message: Message):
             f"▶️ **Stream / Play Online:**\n`{stream_link}`"
         )
         await status.edit(response_text, disable_web_page_preview=True)
+        print(f"[SUCCESS] File saved! msg_id={msg_id}, download_link={dl_link}", flush=True)
     except Exception as e:
-        await status.edit(f"❌ Error saving file: {e}")
+        err_msg = str(e)
+        print(f"[ERROR] Failed to save file: {err_msg}", flush=True)
+        traceback.print_exc()
+        await status.edit(
+            f"❌ **Error saving file to channel:**\n\n"
+            f"`{err_msg}`\n\n"
+            f"💡 **Tip:** Make sure the bot is an **Admin** in the storage channel (`{BIN_CHANNEL}`)."
+        )
 
-@bot.on_message(filters.command("start") & filters.private)
-async def start_command(client: Client, message: Message):
-    await message.reply(
-        "👋 **Welcome!**\n\n"
-        "Send or forward any document, video, or audio file up to **2 GB** to get instant direct download and streaming links."
-    )
+@bot.on_message(filters.private & filters.text)
+async def handle_plain_text(client: Client, message: Message):
+    user_id = message.from_user.id if message.from_user else message.chat.id
+    print(f"[BOT] Received text from User ID: {user_id}: {message.text}", flush=True)
+    await message.reply("Please send or forward a **document, video, or audio file** to get a download link.")
 
 async def main():
+    print("[STARTUP] Starting Telegram Bot Client...", flush=True)
+    try:
+        await bot.start()
+        me = await bot.get_me()
+        print(f"[STARTUP] ✅ Bot successfully connected as @{me.username} (ID: {me.id})", flush=True)
+    except Exception as e:
+        print(f"[STARTUP CRITICAL ERROR] Failed to start Telegram Bot: {e}", flush=True)
+        traceback.print_exc()
+
+    print(f"[STARTUP] Starting web server on port {PORT}...", flush=True)
     app = web.Application()
     app.add_routes(routes)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
-    print(f"Web server started on port {PORT}")
-
-    await bot.start()
-    print("Telegram bot started.")
+    print(f"[STARTUP] ✅ Web server running on port {PORT}", flush=True)
 
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
     asyncio.run(main())
+
