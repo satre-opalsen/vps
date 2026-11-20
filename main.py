@@ -5,6 +5,11 @@ import traceback
 import urllib.parse
 from aiohttp import web
 from dotenv import load_dotenv
+
+# Fix Telegram 64-bit Channel ID support in Pyrogram
+import pyrogram.utils
+pyrogram.utils.MIN_CHANNEL_ID = -10099999999999
+
 from pyrogram import Client, filters
 from pyrogram.types import Message
 
