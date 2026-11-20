@@ -6,6 +6,8 @@ import urllib.parse
 from aiohttp import web
 from dotenv import load_dotenv
 
+import time
+
 # Fix Telegram 64-bit Channel ID support in Pyrogram
 import pyrogram.utils
 pyrogram.utils.MIN_CHANNEL_ID = -10099999999999
@@ -23,14 +25,16 @@ BIN_CHANNEL = int(os.environ.get("BIN_CHANNEL", 0))
 OWNER_ID = int(os.environ.get("OWNER_ID", 0))
 FQDN = os.environ.get("FQDN", "https://meow-onrender-003445.onrender.com").rstrip("/")
 PORT = int(os.environ.get("PORT", 10000))
+SESSION_STRING = os.environ.get("SESSION_STRING", "")
 
 CHUNK_SIZE = 1024 * 1024  # 1 MiB chunk size for streaming
 
-print(f"[INIT] Loaded Config: API_ID={API_ID}, BIN_CHANNEL={BIN_CHANNEL}, OWNER_ID={OWNER_ID}, FQDN={FQDN}, PORT={PORT}", flush=True)
-
-SESSION_STRING = os.environ.get("SESSION_STRING", "")
-
-bot_status = {"online": False, "error": None, "bot_username": None}
+bot_status = {
+    "online": False,
+    "error": "Connecting...",
+    "bot_username": None,
+    "last_attempt": None
+}
 
 if SESSION_STRING:
     bot = Client(
@@ -91,7 +95,16 @@ async def root_handler(request):
     if bot_status["online"]:
         return web.Response(text=f"✅ Bot is running as @{bot_status['bot_username']}! Ready to stream files.")
     else:
-        return web.Response(status=503, text=f"⚠️ Telegram Bot is offline.\n\nError: {bot_status['error']}\n\nTip: If you see FloodWait, generate a new bot token on @BotFather using /revoke to reset the timer instantly.")
+        last = f" (Checked {int(time.time() - bot_status['last_attempt'])}s ago)" if bot_status.get('last_attempt') else ""
+        return web.Response(
+            status=503,
+            text=(
+                f"⏳ Bot is waiting for Telegram cooldown to clear...\n\n"
+                f"Current Telegram Status{last}:\n{bot_status['error']}\n\n"
+                f"🔄 The server is automatically retrying every 30 seconds.\n"
+                f"As soon as Telegram's timer reaches 0, the bot will turn ONLINE automatically without needing a redeploy!"
+            )
+        )
 
 @routes.get("/dl/{msg_id:\\d+}")
 @routes.get("/stream/{msg_id:\\d+}")
@@ -223,22 +236,27 @@ async def handle_plain_text(client: Client, message: Message):
     print(f"[BOT] Received text from User ID: {user_id}: {message.text}", flush=True)
     await message.reply("Please send or forward a **document, video, or audio file** to get a download link.")
 
-async def main():
-    print("[STARTUP] Starting Telegram Bot Client...", flush=True)
-    try:
-        await bot.start()
-        me = await bot.get_me()
-        session_str = await bot.export_session_string()
-        bot_status["online"] = True
-        bot_status["bot_username"] = me.username
-        print(f"[STARTUP] ✅ Bot successfully connected as @{me.username} (ID: {me.id})", flush=True)
-        print(f"[STARTUP] 🔑 Permanent SESSION_STRING:\n{session_str}\n", flush=True)
-    except Exception as e:
-        err_str = str(e)
-        bot_status["error"] = err_str
-        print(f"[STARTUP CRITICAL ERROR] Failed to start Telegram Bot: {err_str}", flush=True)
-        traceback.print_exc()
+async def bot_starter():
+    while not bot_status["online"]:
+        bot_status["last_attempt"] = time.time()
+        print("[STARTUP] Attempting to connect Telegram Bot...", flush=True)
+        try:
+            await bot.start()
+            me = await bot.get_me()
+            session_str = await bot.export_session_string()
+            bot_status["online"] = True
+            bot_status["bot_username"] = me.username
+            bot_status["error"] = None
+            print(f"[STARTUP] ✅ Bot successfully connected as @{me.username} (ID: {me.id})", flush=True)
+            print(f"[STARTUP] 🔑 Permanent SESSION_STRING:\n{session_str}\n", flush=True)
+            break
+        except Exception as e:
+            err_str = str(e)
+            bot_status["error"] = err_str
+            print(f"[RETRY] Connection pending ({err_str}). Retrying in 30s...", flush=True)
+            await asyncio.sleep(30)
 
+async def main():
     print(f"[STARTUP] Starting web server on port {PORT}...", flush=True)
     app = web.Application()
     app.add_routes(routes)
@@ -247,6 +265,9 @@ async def main():
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
     print(f"[STARTUP] ✅ Web server running on port {PORT}", flush=True)
+
+    # Run bot starter in background with auto-retry
+    asyncio.create_task(bot_starter())
 
     await asyncio.Event().wait()
 
