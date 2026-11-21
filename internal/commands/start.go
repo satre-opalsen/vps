@@ -11,6 +11,7 @@ import (
 	"github.com/celestix/gotgproto/dispatcher/handlers"
 	"github.com/celestix/gotgproto/ext"
 	"github.com/celestix/gotgproto/functions"
+	"github.com/celestix/gotgproto/types"
 	"github.com/gotd/td/telegram/message/entity"
 	"github.com/gotd/td/telegram/message/styling"
 	"github.com/gotd/td/tg"
@@ -32,6 +33,12 @@ func start(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 
+	_, _ = sendWelcomeMessage(ctx, u)
+	return dispatcher.EndGroups
+}
+
+func sendWelcomeMessage(ctx *ext.Context, u *ext.Update) (*types.Message, error) {
+	chatId := u.EffectiveChat().GetID()
 	name := "OPERATOR"
 	if u.EffectiveUser() != nil && u.EffectiveUser().FirstName != "" {
 		name = u.EffectiveUser().FirstName
@@ -52,7 +59,7 @@ func start(ctx *ext.Context, u *ext.Update) error {
 	var tb entity.Builder
 	if err := styling.Perform(&tb, HTMLString(welcomeText)); err != nil {
 		utils.Logger.Sugar().Errorf("styling error: %v", err)
-		return err
+		return nil, err
 	}
 	msgText, entities := tb.Complete()
 
@@ -74,12 +81,15 @@ func start(ctx *ext.Context, u *ext.Update) error {
 		ReplyTo:     replyTo,
 	}
 
-	_, err := ctx.SendMessage(chatId, req)
+	msg, err := ctx.SendMessage(chatId, req)
 	if err != nil {
 		utils.Logger.Sugar().Errorf("start SendMessage error: %v, falling back to ctx.Reply", err)
-		_, _ = ctx.Reply(u, ext.ReplyTextStyledText(HTMLString(welcomeText)), &ext.ReplyOpts{
+		msg, err = ctx.Reply(u, ext.ReplyTextStyledText(HTMLString(welcomeText)), &ext.ReplyOpts{
 			NoWebpage: false,
 		})
 	}
-	return dispatcher.EndGroups
+	if msg != nil && msg.ID != 0 {
+		utils.SetWelcomeMessageID(chatId, msg.ID)
+	}
+	return msg, err
 }

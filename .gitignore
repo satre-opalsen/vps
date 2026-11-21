@@ -20,6 +20,7 @@ go.work
 # Env files
 fsb.env
 .env
+welcome_msgs.json
 
 # Session files
 *.session*
